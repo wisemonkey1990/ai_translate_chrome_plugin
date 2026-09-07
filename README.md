@@ -1,79 +1,136 @@
-# AI Web Translator Chrome Extension
+# AI Web Translator
 
 English | [简体中文](README_CN.md)
 
-## Project Introduction
+An unpacked Manifest V3 Chrome extension that translates webpages with OpenAI-compatible Large Language Model (LLM) APIs.
 
-AI Web Translator is a Chrome browser extension based on Large Language Models (LLM), designed to provide more accurate and natural webpage translation compared to traditional machine translation. It can replace Chrome's built-in translation feature, understanding the overall context of webpages through AI technology to deliver more precise translation results.
+## Highlights
 
-## Core Features
+- Translate the current webpage with one click.
+- Continue translating in the background after the popup closes.
+- Render each completed translation progressively instead of waiting for the whole page.
+- Prioritize content near the viewport so visible text appears first.
+- Use up to six concurrent translation workers with automatic backoff for rate limits and server errors.
+- Merge adjacent short text nodes and reuse identical in-flight requests to reduce API calls.
+- Optionally summarize page context without blocking the first translations.
+- Toggle between the original and translated page from a floating toolbar.
+- Download an original/translation comparison as a Markdown file.
+- Remove common model reasoning tags such as `<think>...</think>` from results.
+- Configure API endpoint, model, temperature, formatting behavior, context summary, and system prompt.
+- Cache successful translations locally with a configurable 1-10 MB limit and 30-day expiration.
+- Clear the translation cache manually and inspect current cache usage.
 
-### 🤖 High-Quality LLM-Based Translation
+## Screenshots
 
-- Utilizes Large Language Models for translation, providing more natural and accurate results compared to traditional machine translation
-- Supports webpage content summarization to improve translation quality by understanding the entire context
-- Preserves the original webpage format and layout, offering a seamless reading experience
+### Popup
 
-### ⚙️ Highly Customizable
+![Extension Popup](./screenshots/en/popup.png)
 
-- **Custom API Configuration**: Supports OpenAI API and compatible interfaces, with customizable API Base URL
-- **Custom Model Selection**: Choose different LLM models (such as deepseek-reasoner, gpt-4o, claude-3-7-sonnet, etc.)
-- **Custom Translation Parameters**: Adjust temperature, maximum token count, and other parameters
-- **Custom System Prompts**: Customize translation system prompts to precisely control translation style and quality
-
-### 🌐 Multi-Language Support
-
-- Supports translation between multiple languages (Simplified Chinese, English, Japanese, Korean, French, German, Spanish, Russian, etc.)
-- Extension interface available in both Chinese and English
-
-### 🔄 Convenient User Experience
-
-- One-click translation of the current webpage
-- Quick toggle between original text and translation
-- Ability to stop translation at any time
-- Real-time translation progress display
-
-## Feature Showcase
-
-### Extension Popup Window
-
-![Extension Popup Window](./screenshots/en/popup.png)
-
-### Settings Page
+### Settings
 
 ![Settings Page](./screenshots/en/options.png)
 
-### Translation Showcase
-> ### [DLSite Comic](https://www.dlsite.com/comic/work/=/product_id/BJ01934689.html)
-> ![原始网页](./screenshots/en/original1.png)
-> ![翻译结果](./screenshots/en/translate1.png)
+### Translation
 
-> ### [Wikipedia](https://zh.wikipedia.org/wiki/%E8%89%BE%E6%BA%AA%E6%B9%96)
-> ![原始网页](./screenshots/en/original2.png)
-> ![翻译结果](./screenshots/en/translate2.png)
-## Installation Instructions
+![Original Page](./screenshots/en/original1.png)
+![Translated Page](./screenshots/en/translate1.png)
 
-1. Download or clone this repository to your local machine
-2. Open Chrome browser and navigate to the extensions page (chrome://extensions/)
-3. Enable "Developer mode"
-4. Click "Load unpacked" and select the repository folder
-5. The extension will be installed in your Chrome browser
+## Installation
 
-## Usage Guide
+This project is currently distributed as an unpacked extension.
 
-1. Click the extension icon in the Chrome toolbar to open the popup window
-2. Configure API information in the settings page (click the "Settings" button):
-   - API Base URL (e.g., https://api.openai.com/v1)
-   - Model name (e.g., gpt-4o)
-   - API Key
-   - Optional parameters (Max Tokens, Temperature, etc.)
-3. Select the target language
-4. Click the "Translate Page" button to start translation
-5. During translation, you can click the "Stop Translation" button to stop at any time
-6. After translation is complete, use the toggle button in the bottom right corner of the page to switch between original text and translation
+1. Clone or download this repository.
+2. Open `chrome://extensions/` in Chrome or a Chromium-based browser.
+3. Enable **Developer mode**.
+4. Click **Load unpacked**.
+5. Select the repository directory.
 
-## Privacy Statement
+After changing source files, click **Reload** on the extension card. Reload the webpage before testing content-script changes.
 
-- The extension only processes webpage content when the user actively clicks the "Translate Page" button
-- API keys and other settings are stored locally in the browser and are not sent to any third-party servers
-- During translation, webpage content is sent to the user-configured API server for processing
+## Configuration
+
+Open the extension popup and click **Settings**. Configure:
+
+- **API Base URL**: the base URL of an OpenAI-compatible API, without the final `/chat/completions` path.
+- **Model**: the model name accepted by the selected API provider.
+- **API Key**: stored in Chrome extension storage and never included in this repository.
+- **Temperature** and formatting options.
+- **Page summary**: optional context generation. It runs in parallel and does not block the first translations.
+- **System prompt**: optional translation instructions.
+- **Translation cache limit**: between 1 MB and 10 MB.
+
+The extension sends webpage text to the API endpoint configured by the user. Do not use an endpoint or model that you do not trust.
+
+## Usage
+
+1. Open a webpage that permits content scripts.
+2. Open the extension popup and choose a target language.
+3. Click **Translate Page**.
+4. The popup closes after translation starts; translation continues on the page.
+5. Watch progress in the page overlay or extension badge.
+6. Use the floating toolbar to switch between **View Original / View Translation** or click **Download Comparison**.
+
+The extension cannot run on browser-internal pages such as `chrome://` pages or the Chrome Web Store. For local files, enable **Allow access to file URLs** in the extension details page.
+
+## Performance Design
+
+- **Viewport-first scheduling**: visible and nearby units are placed at the front of the queue.
+- **Translation units**: adjacent direct text nodes are combined up to 200 characters.
+- **In-flight deduplication**: identical text shares the same pending request.
+- **Persistent cache**: successful results are reused across page reloads and browser sessions.
+- **Adaptive concurrency**: 429 and 5xx responses reduce concurrency and trigger exponential cooldown; concurrency recovers after the API stabilizes.
+- **Progressive rendering**: each completed unit is written to the DOM immediately.
+
+## Project Structure
+
+```text
+background.js   MV3 service worker, API requests, retries, output cleanup, badge progress
+content.js      DOM scanning, viewport scheduling, translation, toolbar, download, cache
+popup.html/js   Extension popup and translation controls
+options.html/js Settings and cache management
+tests/          Node-based regression tests
+manifest.json   Chrome extension manifest
+```
+
+## Development and Tests
+
+No package installation is required for the current tests. Run them from the repository root:
+
+```bash
+node --check background.js
+node --check content.js
+node --check options.js
+node tests/cleanModelOutput.test.js
+node tests/buildTranslationUnits.test.js
+node tests/orderUnitsByViewport.test.js
+node tests/fetchWithRetry.test.js
+```
+
+The tests cover reasoning-tag cleanup, text-unit merging, viewport ordering, and retry behavior. Browser-level verification should be performed by loading the unpacked extension in Chrome.
+
+## Privacy and Security
+
+- No API key is hard-coded in the source tree.
+- API keys and preferences are stored in Chrome extension storage.
+- Translation requests are sent only to the API Base URL configured by the user.
+- Webpage content is processed only after the user starts translation.
+- Translation cache is stored locally in `chrome.storage.local` and can be cleared from Settings.
+- Because the extension uses `<all_urls>`, review the source and API configuration before installing it.
+
+## Limitations
+
+- The extension depends on the response format of an OpenAI-compatible `/chat/completions` endpoint.
+- Translation quality, latency, and rate limits depend on the selected model and provider.
+- Dynamic content added after translation is not automatically guaranteed to be translated.
+- Complex pages with heavily customized DOM behavior may require provider-specific or site-specific adjustments.
+
+## Contributing
+
+Issues and pull requests are welcome. Please include:
+
+- A clear description of the problem or proposed change.
+- Reproduction steps for bug reports.
+- Relevant browser console or service-worker errors with secrets removed.
+- Tests for changes to pure logic where practical.
+
+Never commit API keys, cookies, access tokens, private webpages, or other credentials.
