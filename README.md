@@ -2,9 +2,13 @@
 
 English | [简体中文](README_CN.md)
 
-An unpacked Manifest V3 Chrome extension that translates webpages with OpenAI-compatible Large Language Model (LLM) APIs.
+This repository publishes a derivative, unpacked Manifest V3 Chrome extension for translating webpages with OpenAI-compatible Large Language Model (LLM) APIs.
 
-> **Attribution**: This is not an original project. It is based on and extended from [jxzhangaoran/ai_translate_chrome_plugin](https://github.com/jxzhangaoran/ai_translate_chrome_plugin). The work in this repository focuses on communication fixes, translation performance, background progress, export tools, cache controls, tests, and documentation.
+> **Upstream and attribution**: This is not an original project. It is based on and extended from [jxzhangaoran/ai_translate_chrome_plugin](https://github.com/jxzhangaoran/ai_translate_chrome_plugin). The work in this repository focuses on communication fixes, translation performance, background progress, export tools, cache controls, tests, and documentation. This repository is not affiliated with or endorsed by the upstream project or its author.
+
+## Project and Release Notice
+
+This repository publishes a modified derivative of the upstream project named above, not a new independent implementation. Changes are maintained in this repository as separate commits and should be reviewed together with the upstream project before redistribution. Please respect any applicable upstream license, attribution requirements, and third-party API terms.
 
 ## Highlights
 

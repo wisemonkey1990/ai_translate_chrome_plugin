@@ -2,9 +2,13 @@
 
 [English](README.md) | 简体中文
 
-一款基于 Manifest V3 的 Chrome 网页翻译扩展，使用用户配置的 OpenAI 兼容大语言模型 API 进行翻译。
+本仓库发布的是一个基于上游项目修改和扩展而来的 Manifest V3 Chrome 网页翻译扩展，使用用户配置的 OpenAI 兼容大语言模型 API 进行翻译。
 
-> **参考与致谢**：本项目并非原创项目，基于 [jxzhangaoran/ai_translate_chrome_plugin](https://github.com/jxzhangaoran/ai_translate_chrome_plugin) 参考和扩展而来。本仓库的工作主要包括通信修复、翻译性能优化、后台进度、导出工具、缓存管理、测试与开源文档完善。
+> **上游来源与致谢**：本项目并非原创项目，基于 [jxzhangaoran/ai_translate_chrome_plugin](https://github.com/jxzhangaoran/ai_translate_chrome_plugin) 参考和扩展而来。本仓库的工作主要包括通信修复、翻译性能优化、后台进度、导出工具、缓存管理、测试与开源文档完善。本仓库与上游项目及其作者不存在隶属、合作或背书关系。
+
+## 项目与发布说明
+
+本仓库发布的是上述上游项目的修改版衍生作品，不是独立原创实现。这里的改动以独立提交维护；再次分发前，请同时审阅上游项目，并遵守其可能适用的许可证、署名要求及第三方 API 服务条款。
 
 ## 功能亮点
 
