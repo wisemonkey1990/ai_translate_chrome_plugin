@@ -158,3 +158,18 @@ button {
 .small-button:hover {
   background-color: #e8eaed;
 }
+
+.cache-control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cache-control-row input {
+  flex: 1;
+}
+
+.cache-control-row .small-button {
+  margin-top: 0;
+  white-space: nowrap;
+}

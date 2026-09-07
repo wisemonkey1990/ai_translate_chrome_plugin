@@ -13,6 +13,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const debugModeCheckbox = document.getElementById('debugMode');
   const systemPromptTextarea = document.getElementById('systemPrompt');
   const resetPromptButton = document.getElementById('resetPromptButton');
+  const translationCacheLimitInput = document.getElementById('translationCacheLimitMB');
+  const clearTranslationCacheButton = document.getElementById('clearTranslationCacheButton');
+  const translationCacheUsage = document.getElementById('translationCacheUsage');
   const saveButton = document.getElementById('saveButton');
   const testButton = document.getElementById('testButton');
   const resetButton = document.getElementById('resetButton');
@@ -20,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 加载保存的设置
   loadSavedSettings();
+  refreshTranslationCacheUsage();
 
   // 保存设置
   apiConfigForm.addEventListener('submit', (e) => {
@@ -45,6 +49,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     systemPromptTextarea.value = await getDefaultSystemPrompt();
     const message = await getI18nMessage('defaultPromptRestored');
     showStatus(message, 'info');
+  });
+
+  // 清空翻译缓存
+  clearTranslationCacheButton.addEventListener('click', async () => {
+    if (!confirm('确定要清空所有翻译缓存吗？这不会删除 API 配置。')) {
+      return;
+    }
+
+    try {
+      const allData = await getLocalStorage(null);
+      const cacheKeys = Object.keys(allData).filter(key => key.startsWith('transCache:'));
+      if (cacheKeys.length > 0) {
+        await removeLocalStorage(cacheKeys);
+      }
+      await refreshTranslationCacheUsage();
+      showStatus('翻译缓存已清空', 'success');
+    } catch (error) {
+      console.error('清空翻译缓存失败:', error);
+      showStatus('清空翻译缓存失败: ' + error.message, 'error');
+    }
+  });
+
+  translationCacheLimitInput.addEventListener('change', () => {
+    refreshTranslationCacheUsage();
   });
   
   // 界面语言变更事件
@@ -85,7 +113,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       'preserveFormatting',
       'enablePageSummary',
       'debugMode',
-      'systemPrompt'
+      'systemPrompt',
+      'translationCacheLimitMB'
     ], (result) => {
       // 设置界面语言
       if (result.interfaceLanguage) {
@@ -100,6 +129,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (result.preserveFormatting) preserveFormattingCheckbox.checked = result.preserveFormatting;
       if (result.enablePageSummary !== undefined) document.getElementById('enablePageSummary').checked = result.enablePageSummary;
       if (result.debugMode) debugModeCheckbox.checked = result.debugMode;
+      if (result.translationCacheLimitMB !== undefined) {
+        translationCacheLimitInput.value = result.translationCacheLimitMB;
+      }
       
       // 加载系统提示词，如果没有保存过则使用默认值
       if (result.systemPrompt) {
@@ -109,6 +141,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           systemPromptTextarea.value = defaultPrompt;
         });
       }
+
+      refreshTranslationCacheUsage();
     });
   }
 
@@ -130,6 +164,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
+    const cacheLimitMB = Number(translationCacheLimitInput.value);
+    if (!Number.isFinite(cacheLimitMB) || cacheLimitMB < 1 || cacheLimitMB > 10) {
+      showStatus('缓存容量上限必须在 1-10 MB 之间', 'error');
+      return;
+    }
+
     // 保存设置到Chrome存储
     chrome.storage.sync.set({
       apiBaseUrl: apiBaseUrlInput.value,
@@ -140,10 +180,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       preserveFormatting: preserveFormattingCheckbox.checked,
       enablePageSummary: document.getElementById('enablePageSummary').checked,
       debugMode: debugModeCheckbox.checked,
-      systemPrompt: systemPromptTextarea.value || await getDefaultSystemPrompt()
+      systemPrompt: systemPromptTextarea.value || await getDefaultSystemPrompt(),
+      translationCacheLimitMB: cacheLimitMB
     }, async () => {
+      await trimTranslationCache(cacheLimitMB * 1024 * 1024);
       const message = await getI18nMessage('settingsSaved');
       showStatus(message, 'success');
+      refreshTranslationCacheUsage();
     });
   }
 
@@ -214,7 +257,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       'enablePageSummary',
       'debugMode',
       'targetLanguage',
-      'systemPrompt'
+      'systemPrompt',
+      'translationCacheLimitMB'
       // 注意：不要删除interfaceLanguage设置
     ], async () => {
       // 清空表单
@@ -226,6 +270,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       preserveFormattingCheckbox.checked = false;
       document.getElementById('enablePageSummary').checked = false;
       debugModeCheckbox.checked = false;
+      translationCacheLimitInput.value = 8;
       systemPromptTextarea.value = await getDefaultSystemPrompt();
       
       const resetMessage = await getI18nMessage('settingsReset');
@@ -249,5 +294,80 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusMessage.className = 'status-message';
       }, 3000);
     }
+  }
+
+  // 获取指定缓存占用的字节数
+  function getLocalStorage(keys) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.get(keys, (result) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(result || {});
+      });
+    });
+  }
+
+  function removeLocalStorage(keys) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.remove(keys, () => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  async function refreshTranslationCacheUsage() {
+    try {
+      const allData = await getLocalStorage(null);
+      const cacheKeys = Object.keys(allData).filter(key => key.startsWith('transCache:'));
+      const bytes = await getLocalStorageBytes(cacheKeys);
+      const limit = Number(translationCacheLimitInput.value) || 8;
+      translationCacheUsage.textContent = `当前占用: ${formatBytes(bytes)} / ${limit} MB`;
+    } catch (error) {
+      console.error('读取翻译缓存占用失败:', error);
+      translationCacheUsage.textContent = '当前占用: 无法读取';
+    }
+  }
+
+  function getLocalStorageBytes(keys) {
+    if (keys.length === 0) return Promise.resolve(0);
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.getBytesInUse(keys, (amount) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(amount || 0);
+      });
+    });
+  }
+
+  // 保存容量设置时立即淘汰最旧缓存，避免旧数据继续占用超出上限的空间。
+  async function trimTranslationCache(limitBytes) {
+    const allData = await getLocalStorage(null);
+    const cacheKeys = Object.keys(allData).filter(key => key.startsWith('transCache:'));
+    let usage = await getLocalStorageBytes(cacheKeys);
+    if (usage <= limitBytes) return;
+
+    const entries = cacheKeys
+      .map(key => ({ key, ts: Number(allData[key]?.ts) || 0 }))
+      .sort((a, b) => a.ts - b.ts);
+
+    for (const entry of entries) {
+      if (usage <= limitBytes) break;
+      await removeLocalStorage(entry.key);
+      usage = await getLocalStorageBytes(cacheKeys.filter(key => key !== entry.key));
+    }
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   }
 });

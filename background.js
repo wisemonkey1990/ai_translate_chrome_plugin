@@ -170,11 +170,51 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // 保持消息通道开放，以便异步响应
   }
   
+  // 后台翻译进度 → 更新扩展图标角标（弹窗关闭后也能看到进度）
+  if (request.action === 'translationProgress' ||
+      request.action === 'translationComplete' ||
+      request.action === 'translationError' ||
+      request.action === 'translationStopped' ||
+      request.action === 'summarizingPage') {
+    updateTranslationBadge(request);
+    sendResponse({ received: true });
+    return true;
+  }
+  
   // 处理未知消息类型
   console.log('收到未知消息类型:', request.action);
   sendResponse({ success: false, error: '未知消息类型' });
   return true;
 });
+
+// 根据翻译状态更新扩展图标角标
+function updateTranslationBadge(request) {
+  try {
+    if (request.action === 'summarizingPage') {
+      chrome.action.setBadgeBackgroundColor({ color: '#4285f4' });
+      chrome.action.setBadgeText({ text: '…' });
+    } else if (request.action === 'translationProgress') {
+      chrome.action.setBadgeBackgroundColor({ color: '#4285f4' });
+      const pct = Math.min(100, Math.max(0, Math.round(request.progress || 0)));
+      chrome.action.setBadgeText({ text: pct + '%' });
+    } else if (request.action === 'translationComplete') {
+      chrome.action.setBadgeBackgroundColor({ color: '#34a853' });
+      chrome.action.setBadgeText({ text: '✓' });
+      // 4 秒后自动清除角标
+      setTimeout(() => {
+        chrome.action.setBadgeText({ text: '' });
+      }, 4000);
+    } else if (request.action === 'translationError' || request.action === 'translationStopped') {
+      chrome.action.setBadgeBackgroundColor({ color: '#ea4335' });
+      chrome.action.setBadgeText({ text: '!' });
+      setTimeout(() => {
+        chrome.action.setBadgeText({ text: '' });
+      }, 4000);
+    }
+  } catch (error) {
+    console.error('更新角标失败:', error);
+  }
+}
 
 // 使用LLM API总结网页内容
 async function summarizePageContent(content) {
@@ -226,21 +266,8 @@ async function summarizePageContent(content) {
   }
   
   try {
-    // 发送API请求
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`
-      },
-      body: JSON.stringify(requestBody)
-    });
-    
-    // 检查响应状态
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(`API错误 (${response.status}): ${errorData.error?.message || response.statusText}`);
-    }
+    // 发送API请求（429/5xx/网络错误自动指数退避重试）
+    const response = await fetchWithRetry(apiUrl, requestBody, config);
     
     // 解析响应
     const data = await response.json();
@@ -252,7 +279,7 @@ async function summarizePageContent(content) {
     
     // 提取总结结果
     if (data.choices && data.choices.length > 0 && data.choices[0].message) {
-      return data.choices[0].message.content.trim();
+      return cleanModelOutput(data.choices[0].message.content);
     } else {
       throw new Error('API响应格式不正确');
     }
@@ -303,21 +330,8 @@ async function translateText(text, targetLang, pageSummary) {
   }
   
   try {
-    // 发送API请求
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`
-      },
-      body: JSON.stringify(requestBody)
-    });
-    
-    // 检查响应状态
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(`API错误 (${response.status}): ${errorData.error?.message || response.statusText}`);
-    }
+    // 发送API请求（429/5xx/网络错误自动指数退避重试）
+    const response = await fetchWithRetry(apiUrl, requestBody, config);
     
     // 解析响应
     const data = await response.json();
@@ -329,7 +343,7 @@ async function translateText(text, targetLang, pageSummary) {
     
     // 提取翻译结果
     if (data.choices && data.choices.length > 0 && data.choices[0].message) {
-      return data.choices[0].message.content.trim();
+      return cleanModelOutput(data.choices[0].message.content);
     } else {
       throw new Error('API响应格式不正确');
     }
@@ -401,4 +415,80 @@ function getApiConfig() {
       reject(error);
     }
   });
+}
+
+// 清洗模型输出中夹带的思维链/推理标签（如 <think>...</think>、<reasoning> 等）
+function cleanModelOutput(text) {
+  if (!text) return text;
+  
+  let cleaned = String(text);
+  
+  // 1. 移除成对的思维链块（含换行内容）
+  cleaned = cleaned.replace(/<\s*(think|thinking|reasoning|analysis|thought)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '');
+  
+  // 2. 移除成对的 [thinking]/[reasoning] 块（部分服务使用方括号形式）
+  cleaned = cleaned.replace(/\[\s*(thinking|reasoning|analysis|thought)\s*\][\s\S]*?\[\s*\/\s*\1\s*\]/gi, '');
+  
+  // 3. 移除残留的单个开/闭标签（可能被截断导致的孤立 </think>）
+  cleaned = cleaned.replace(/<\s*\/?\s*(think|thinking|reasoning|analysis|thought)\b[^>]*>/gi, '');
+  cleaned = cleaned.replace(/\[\s*\/?\s*(thinking|reasoning|analysis|thought)\s*\]/gi, '');
+  
+  cleaned = cleaned.trim();
+  
+  // 若全部被清空，退回原始文本，避免返回空内容
+  return cleaned || String(text).trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 发送 API 请求并对可重试错误做指数退避重试：
+// - 429 与 5xx：最多重试 2 次，退避时间随次数翻倍（429 用更长间隔）
+// - 网络异常：同样退避重试
+// 返回已成功的 response；重试耗尽后抛出带状态码的错误（content 侧据此限流回退）
+async function fetchWithRetry(apiUrl, requestBody, config, maxAttempts = 3) {
+  let lastError = null;
+  
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let response;
+    try {
+      response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.apiKey}`
+        },
+        body: JSON.stringify(requestBody)
+      });
+    } catch (netError) {
+      lastError = netError;
+      if (attempt < maxAttempts - 1) {
+        await sleep(1500 * Math.pow(2, attempt));
+        continue;
+      }
+      break;
+    }
+    
+    if (response.ok) {
+      return response;
+    }
+    
+    const errorData = await response.json().catch(() => ({}));
+    const message = `API错误 (${response.status}): ${errorData.error?.message || response.statusText}`;
+    const retriable = response.status === 429 || response.status >= 500;
+    
+    if (retriable && attempt < maxAttempts - 1) {
+      const baseDelay = response.status === 429 ? 1500 : 800;
+      await sleep(baseDelay * Math.pow(2, attempt));
+      continue;
+    }
+    
+    // 重试耗尽：抛出携带状态码的错误，content 侧可据此做并发回退
+    const err = new Error(message);
+    err.status = response.status;
+    throw err;
+  }
+  
+  throw new Error(lastError ? `网络请求失败: ${lastError.message}` : 'API请求失败');
 }

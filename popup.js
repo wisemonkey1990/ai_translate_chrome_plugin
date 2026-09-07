@@ -1,3 +1,46 @@
+// 确保content script已注入到目标标签页，再发送消息
+// 修复 "Could not establish connection. Receiving end does not exist." 错误
+async function ensureContentScript(tabId) {
+  return new Promise((resolve) => {
+    // 先尝试直接发送一个探测消息，确认content script是否已存在
+    chrome.tabs.sendMessage(tabId, { action: 'ping' }, (response) => {
+      if (!chrome.runtime.lastError && response) {
+        // content script已存在，直接使用
+        resolve();
+        return;
+      }
+      
+      // content script不存在，程序化注入它
+      chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        files: ['content.js']
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('注入content script错误:', chrome.runtime.lastError);
+          resolve();
+          return;
+        }
+        // 等待content script初始化完成
+        setTimeout(resolve, 100);
+      });
+    });
+  });
+}
+
+// 向活动标签页发送消息，先确保content script存在
+function sendMessageToActiveTab(action, callback) {
+  chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+    const tab = tabs && tabs[0];
+    if (!tab) {
+      callback && callback(null);
+      return;
+    }
+    
+    await ensureContentScript(tab.id);
+    chrome.tabs.sendMessage(tab.id, action, callback);
+  });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // 获取DOM元素
   const translateButton = document.getElementById('translatePage');
@@ -45,6 +88,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
       
+      // 先确保content script已注入，再发送翻译消息
+      await ensureContentScript(tab.id);
+      
       // 发送消息到content script开始翻译
       chrome.tabs.sendMessage(tab.id, { 
         action: 'translate', 
@@ -60,6 +106,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (response && response.status === 'started') {
           const progressMessage = await getI18nMessage('translationProgress', 50);
           updateStatus(progressMessage, 50);
+          
+          // 后台自动翻译：关闭弹窗后翻译继续，页面内进度条与扩展角标实时显示进度
+          setTimeout(() => {
+            if (window.close) {
+              window.close();
+            }
+          }, 800);
         } else {
           console.log('收到未预期的响应:', response);
         }
@@ -74,6 +127,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 停止翻译按钮点击事件
   stopButton.addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+    await ensureContentScript(tab.id);
     
     chrome.tabs.sendMessage(tab.id, { action: 'stopTranslation' }, async (response) => {
       if (chrome.runtime.lastError) {
@@ -104,6 +159,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateStatus(errorMessage, 0);
         return;
       }
+      
+      // 先确保content script已注入，再发送切换语言消息
+      await ensureContentScript(tab.id);
       
       // 发送消息到content script切换语言
       chrome.tabs.sendMessage(tab.id, { action: 'toggleLanguage' }, async (response) => {
@@ -200,6 +258,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('https://chrome.google.com/webstore')) {
         return;
       }
+      
+      // 先确保content script已注入，再检查翻译状态
+      await ensureContentScript(tab.id);
       
       // 发送消息到content script检查翻译状态
       chrome.tabs.sendMessage(tab.id, { action: 'checkTranslationStatus' }, async (response) => {
