@@ -1,19 +1,30 @@
-// 初始化标志
-console.log('AI翻译 background script 已加载');
+// 调试开关：仅在用户开启“调试模式”时输出详细日志，避免生产环境刷屏。
+let DEBUG = false;
+chrome.storage.sync.get(['debugMode'], (result) => {
+  if (!chrome.runtime.lastError) DEBUG = !!result.debugMode;
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'sync' && changes.debugMode) {
+    DEBUG = !!changes.debugMode.newValue;
+  }
+});
+function debugLog(...args) {
+  if (DEBUG) console.log(...args);
+}
 
 // 监听来自content script的消息
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('收到消息:', request, '来自:', sender);
-  
+  debugLog('收到消息:', request, '来自:', sender);
+
   if (request.action === 'contentScriptLoaded') {
     // 响应content script的测试消息
-    console.log('Content script 已加载，通信正常');
+    debugLog('Content script 已加载，通信正常');
     sendResponse({ status: 'background_received' });
     return true;
   }
   
   if (request.action === 'summarizePageContent') {
-    console.log('收到网页内容总结请求，内容长度:', request.content.length);
+    debugLog('收到网页内容总结请求，内容长度:', request.content && request.content.length);
     
     // 验证请求参数
     if (!request.content) {
@@ -35,7 +46,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       timeoutPromise
     ])
       .then(summary => {
-        console.log('网页内容总结成功，返回结果:', summary);
+        debugLog('网页内容总结成功，返回结果:', summary);
         sendResponse({ success: true, summary });
       })
       .catch(error => {
@@ -50,7 +61,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.action === 'translateText') {
-    console.log('收到翻译请求:', request.text.substring(0, 30) + '...', '目标语言:', request.targetLang);
+    debugLog('收到翻译请求:', (request.text || '').substring(0, 30) + '...', '目标语言:', request.targetLang);
     
     // 验证请求参数
     if (!request.text || !request.targetLang) {
@@ -72,7 +83,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       timeoutPromise
     ])
       .then(translatedText => {
-        console.log('翻译成功，返回结果: ' + translatedText);
+        debugLog('翻译成功，返回结果: ' + translatedText);
         sendResponse({ success: true, translatedText });
       })
       .catch(error => {
@@ -86,87 +97,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // 保持消息通道开放，以便异步响应
   }
   
-  if (request.action === 'getI18nMessage') {
-    console.log('收到获取翻译文本请求:', request.key);
-    
-    try {
-      // 获取当前界面语言
-      chrome.storage.sync.get(['interfaceLanguage'], (result) => {
-        if (chrome.runtime.lastError) {
-          console.error('获取界面语言错误:', chrome.runtime.lastError);
-          sendResponse({ 
-            success: false, 
-            error: chrome.runtime.lastError.message 
-          });
-          return;
-        }
-        
-        const lang = result.interfaceLanguage || 'zh-CN';
-        
-        // 获取翻译文本
-        const i18n = {
-          'zh-CN': {
-            'viewOriginal': '查看原文',
-            'viewTranslation': '查看翻译'
-          },
-          'en': {
-            'viewOriginal': 'View Original',
-            'viewTranslation': 'View Translation'
-          }
-        };
-        
-        const message = i18n[lang][request.key] || i18n['zh-CN'][request.key] || request.key;
-        
-        sendResponse({ 
-          success: true, 
-          message: message 
-        });
-      });
-    } catch (error) {
-      console.error('获取翻译文本异常:', error);
-      sendResponse({ 
-        success: false, 
-        error: error.message 
-      });
-    }
-    
-    return true; // 保持消息通道开放，以便异步响应
-  }
-  
   if (request.action === 'getApiConfig') {
-    console.log('收到获取API配置请求');
-    
+    debugLog('收到获取API配置请求');
+
     try {
-      chrome.storage.sync.get(['apiBaseUrl', 'apiModel', 'apiKey', 'temperature', 'preserveFormatting', 'enablePageSummary', 'debugMode', 'systemPrompt', 'interfaceLanguage'], (result) => {
+      // 安全：content script 只需要以下开关，绝不下发 apiKey/apiBaseUrl 等敏感配置。
+      // 真正的 API 请求全部在 background 内完成，密钥不离开 service worker。
+      chrome.storage.sync.get(['enablePageSummary', 'debugMode'], (result) => {
         if (chrome.runtime.lastError) {
           console.error('获取API配置错误:', chrome.runtime.lastError);
-          sendResponse({ 
-            success: false, 
-            error: chrome.runtime.lastError.message 
+          sendResponse({
+            success: false,
+            error: chrome.runtime.lastError.message
           });
           return;
         }
-        
-        // 不要在日志中显示API密钥
-        const logResult = { ...result };
-        if (logResult.apiKey) {
-          logResult.apiKey = '******';
-        }
-        console.log('返回API配置:', logResult);
-        
-        sendResponse({ 
-          success: true, 
-          config: result 
+
+        sendResponse({
+          success: true,
+          config: {
+            enablePageSummary: !!result.enablePageSummary,
+            debugMode: !!result.debugMode
+          }
         });
       });
     } catch (error) {
       console.error('获取API配置异常:', error);
-      sendResponse({ 
-        success: false, 
-        error: error.message 
+      sendResponse({
+        success: false,
+        error: error.message
       });
     }
-    
+
     return true; // 保持消息通道开放，以便异步响应
   }
   
@@ -182,7 +144,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   // 处理未知消息类型
-  console.log('收到未知消息类型:', request.action);
+  debugLog('收到未知消息类型:', request.action);
   sendResponse({ success: false, error: '未知消息类型' });
   return true;
 });
@@ -318,9 +280,10 @@ async function translateText(text, targetLang, pageSummary) {
         content: prompt
       }
     ],
-    temperature: config.temperature || 0.3,
+    // 注意用 ?? 而非 ||：用户显式设置 temperature 为 0（最确定输出）时不应被替换成 0.3
+    temperature: config.temperature ?? 0.3,
   };
-  
+
   // 调试模式下记录请求
   if (config.debugMode) {
     console.log('Translation request:', {

@@ -10,10 +10,10 @@ async function ensureContentScript(tabId) {
         return;
       }
       
-      // content script不存在，程序化注入它
+      // content script不存在，程序化注入它（含 i18n.js，保证 getI18nMessage 可用）
       chrome.scripting.executeScript({
         target: { tabId: tabId },
-        files: ['content.js']
+        files: ['i18n.js', 'content.js']
       }, () => {
         if (chrome.runtime.lastError) {
           console.error('注入content script错误:', chrome.runtime.lastError);

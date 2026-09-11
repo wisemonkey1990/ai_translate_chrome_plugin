@@ -15,13 +15,18 @@ if (typeof window.aiTranslate === 'undefined') {
 // 使用简写变量，方便访问
 const aiTranslate = window.aiTranslate;
 
+// 调试日志：仅在用户开启调试模式后输出，避免生产环境刷屏。
+function debugLog(...args) {
+  if (aiTranslate && aiTranslate.debugMode) console.log(...args);
+}
+
 // 初始化标志，确保我们知道content script已加载
-console.log('[AI翻译] Content script 已加载');
+debugLog('[AI翻译] Content script 已加载');
 
 // 监听来自popup的消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[AI翻译] 收到消息:', message);
-  
+  debugLog('[AI翻译] 收到消息:', message);
+
   if (message.action === 'ping') {
     // 用于探测content script是否存在，避免消息发送失败
     sendResponse({ status: 'pong' });
@@ -31,7 +36,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'translate') {
     // 开始翻译
     aiTranslate.currentTargetLang = message.targetLang;
-    console.log('[AI翻译] 开始翻译，目标语言:', aiTranslate.currentTargetLang);
+    debugLog('[AI翻译] 开始翻译，目标语言:', aiTranslate.currentTargetLang);
     
     // 立即发送响应，表示已收到请求
     sendResponse({ status: 'started' });
@@ -45,34 +50,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }, 0);
   } else if (message.action === 'stopTranslation') {
     // 停止翻译
-    console.log('[AI翻译] 收到停止翻译请求');
+    debugLog('[AI翻译] 收到停止翻译请求');
     stopTranslation();
     sendResponse({ status: 'stopped' });
   } else if (message.action === 'toggleLanguage') {
     // 切换语言
-    console.log('[AI翻译] 收到切换语言请求');
+    debugLog('[AI翻译] 收到切换语言请求');
     toggleLanguage();
     sendResponse({ status: 'toggled', isTranslated: aiTranslate.isTranslated });
   } else if (message.action === 'checkTranslationStatus') {
     // 检查翻译状态
-    sendResponse({ 
+    sendResponse({
       isTranslated: aiTranslate.isTranslated,
       currentTargetLang: aiTranslate.currentTargetLang
     });
   } else {
-    console.log('[AI翻译] 收到未知消息类型:', message.action);
+    debugLog('[AI翻译] 收到未知消息类型:', message.action);
     sendResponse({ status: 'unknown_action' });
   }
-  
+
   return true; // 保持消息通道开放
 });
 
 // 发送测试消息到background，确认通信正常
 chrome.runtime.sendMessage({ action: 'contentScriptLoaded' }, response => {
   if (chrome.runtime.lastError) {
-    console.error('[AI翻译] 无法连接到background script:', chrome.runtime.lastError);
+    debugLog('[AI翻译] 无法连接到background script:', chrome.runtime.lastError);
   } else {
-    console.log('[AI翻译] 与background script通信正常:', response);
+    debugLog('[AI翻译] 与background script通信正常:', response);
   }
 });
 
@@ -173,6 +178,7 @@ async function startTranslation(targetLang) {
     
     // 重置本次会话的文本去重缓存（相同原文只请求一次）
     aiTranslate.dedupeInFlight = new Map();
+    aiTranslate.cacheWritesSinceTrim = 0;
     
     if (aiTranslate.debugMode) {
       console.log(`[AI翻译] 找到 ${textNodes.length} 个可翻译文本节点，合并为 ${units.length} 个翻译单元`);
@@ -216,10 +222,10 @@ async function startTranslation(targetLang) {
         });
         
         pageSummary = summaryResponse;
-        
-        if (aiTranslate.debugMode) {
-          console.log('[AI翻译] 网页内容总结完成，后续翻译将携带上下文');
-        }
+        // 存到共享状态，供后续动态内容增量翻译复用同一上下文
+        aiTranslate.pageSummary = summaryResponse;
+
+        debugLog('[AI翻译] 网页内容总结完成，后续翻译将携带上下文');
       } catch (error) {
         console.error('[AI翻译] 网页内容总结失败（不影响翻译）:', error);
       }
@@ -357,6 +363,9 @@ async function startTranslation(targetLang) {
     }
     await Promise.all(workers);
 
+    // 收尾整理一次缓存，保证节流期间新增的条目也不超出容量上限。
+    trimTranslationCache(aiTranslate.cacheLimitBytes || 8 * 1024 * 1024);
+
     // —— 收尾：无论完成、中止还是部分失败，尽量保留结果并给出反馈 ——
     const wasUserStopped = aiTranslate.translationAborted && !firstError && consecutiveFailures < 5;
 
@@ -387,6 +396,11 @@ async function startTranslation(targetLang) {
       }
     }
 
+    // 页面已进入译文状态：启动动态内容监听，翻译后续新增的节点（SPA/无限滚动/懒加载）
+    if (aiTranslate.isTranslated) {
+      startDynamicObserver(targetLang);
+    }
+
     hideProgressOverlay();
   } catch (error) {
     console.error('[AI翻译] 翻译过程中出错:', error);
@@ -407,6 +421,7 @@ function ensureProgressOverlay() {
   
   const overlay = document.createElement('div');
   overlay.id = 'aiTranslateProgressOverlay';
+  overlay.dataset.aiTranslateUi = '1';
   overlay.style.cssText = `
     position: fixed;
     bottom: 70px;
@@ -481,57 +496,187 @@ function hideProgressOverlay() {
 function stopTranslation() {
   aiTranslate.translationAborted = true;
   aiTranslate.isTranslating = false;
-  
-  if (aiTranslate.debugMode) {
-    console.log('[AI翻译] 手动停止翻译');
-  }
+
+  debugLog('[AI翻译] 手动停止翻译');
 }
 
-// 获取可翻译的文本节点
-function getTranslatableTextNodes() {
-  // 获取所有可见的文本节点
-  const textNodes = [];
-  const body = document.body;
-  
-  // 需要排除的元素
-  const excludeSelectors = [
-    'script', 'style', 'noscript', 'iframe', 'svg', 'path', 'meta',
-    'link', 'head', 'title', 'input', 'textarea', 'code', 'pre'
-  ];
-  
-  // 递归遍历DOM树
-  function traverse(node) {
-    // 跳过不可见元素
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const style = window.getComputedStyle(node);
-      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-        return;
-      }
-      
-      // 跳过排除的元素
-      if (excludeSelectors.includes(node.tagName.toLowerCase())) {
-        return;
+// —— 动态内容增量翻译 ——
+// 监听 DOM 变化，翻译后续新增的可翻译节点（SPA 路由切换、无限滚动、懒加载评论等）。
+// 仅在“显示译文”状态且未进行整页翻译时处理；对新增节点做 500ms 防抖批量翻译，
+// 复用去重缓存与跨会话缓存，尽量减少额外 API 调用。
+function startDynamicObserver(targetLang) {
+  aiTranslate.dynamicTargetLang = targetLang;
+  if (aiTranslate.mutationObserver) return; // 已在监听
+  if (!document.body || typeof MutationObserver === 'undefined') return;
+
+  aiTranslate.pendingDynamicNodes = new Set();
+
+  const observer = new MutationObserver((mutations) => {
+    if (!aiTranslate.isTranslated || aiTranslate.isTranslating) return;
+
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          // 跳过扩展自身注入的 UI
+          if (node.dataset && node.dataset.aiTranslateUi === '1') continue;
+          if (typeof node.closest === 'function' && node.closest('[data-ai-translate-ui="1"]')) continue;
+          aiTranslate.pendingDynamicNodes.add(node);
+        } else if (node.nodeType === Node.TEXT_NODE) {
+          if (isMeaningfulText(node.textContent) && !aiTranslate.originalTexts.has(node)) {
+            aiTranslate.pendingDynamicNodes.add(node);
+          }
+        }
       }
     }
-    
-    // 处理文本节点
-    if (node.nodeType === Node.TEXT_NODE) {
-      // 使用trim()只是为了检查是否有有意义的文本，但保存原始文本
-      const trimmedText = node.textContent.trim();
-      // 只处理非空且包含有意义文本的节点
-      if (trimmedText && trimmedText.length > 1 && !/^\s*$/.test(trimmedText) && !/^\d+$/.test(trimmedText)) {
+
+    if (aiTranslate.pendingDynamicNodes.size > 0) {
+      scheduleDynamicTranslate();
+    }
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
+  aiTranslate.mutationObserver = observer;
+  debugLog('[AI翻译] 已启动动态内容监听');
+}
+
+// 防抖调度：把短时间内的多次 DOM 变化合并成一次批量翻译
+function scheduleDynamicTranslate() {
+  if (aiTranslate.dynamicTimer) return;
+  aiTranslate.dynamicTimer = setTimeout(() => {
+    aiTranslate.dynamicTimer = null;
+    const nodes = Array.from(aiTranslate.pendingDynamicNodes);
+    aiTranslate.pendingDynamicNodes.clear();
+    processNewNodes(nodes, aiTranslate.dynamicTargetLang).catch((error) => {
+      debugLog('[AI翻译] 动态翻译失败:', error);
+    });
+  }, 500);
+}
+
+// 翻译一批新增节点
+async function processNewNodes(nodes, targetLang) {
+  if (!aiTranslate.isTranslated || aiTranslate.isTranslating || aiTranslate.translationAborted) return;
+
+  // 收集新增的、尚未翻译过的可翻译文本节点
+  const textNodes = [];
+  const seen = new Set();
+  for (const node of nodes) {
+    if (!node || !node.parentNode) continue; // 可能已被移除
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      for (const tn of getTranslatableTextNodes(node)) {
+        if (!seen.has(tn) && !aiTranslate.originalTexts.has(tn)) {
+          seen.add(tn);
+          textNodes.push(tn);
+        }
+      }
+    } else if (node.nodeType === Node.TEXT_NODE) {
+      if (!seen.has(node) && !aiTranslate.originalTexts.has(node) && isMeaningfulText(node.textContent)) {
+        seen.add(node);
         textNodes.push(node);
       }
-      return;
-    }
-    
-    // 递归处理子节点
-    for (const child of node.childNodes) {
-      traverse(child);
     }
   }
-  
-  traverse(body);
+
+  if (textNodes.length === 0) return;
+
+  const units = buildTranslationUnits(textNodes);
+  units.forEach((unit) => {
+    unit.nodes.forEach((n) => {
+      if (!aiTranslate.originalTexts.has(n)) {
+        aiTranslate.originalTexts.set(n, n.textContent);
+      }
+    });
+  });
+  // 并入文档顺序单元列表，供“下载对照”使用
+  aiTranslate.units = (aiTranslate.units || []).concat(units);
+
+  const cache = aiTranslate.dedupeInFlight || (aiTranslate.dedupeInFlight = new Map());
+  const maxConcurrent = Math.min(4, units.length);
+  let idx = 0;
+
+  async function worker() {
+    while (idx < units.length) {
+      if (aiTranslate.translationAborted || !aiTranslate.isTranslated) return;
+      const unit = units[idx++];
+      const key = unit.original.trim();
+      try {
+        let translated;
+        if (cache.has(key)) {
+          translated = await cache.get(key);
+        } else {
+          const pending = requestTranslationForText(unit.original, targetLang, () => aiTranslate.pageSummary || null)
+            .catch((error) => {
+              cache.delete(key);
+              throw error;
+            });
+          cache.set(key, pending);
+          translated = await pending;
+        }
+        if (!aiTranslate.isTranslated || aiTranslate.translationAborted) return;
+        applyTranslationToUnit(unit, translated, targetLang);
+      } catch (error) {
+        debugLog('[AI翻译] 动态单元翻译失败，跳过:', (error && error.message) || error);
+      }
+    }
+  }
+
+  const workers = [];
+  for (let i = 0; i < maxConcurrent; i++) {
+    workers.push(worker());
+  }
+  await Promise.all(workers);
+}
+
+// 需要整体跳过的元素标签（连同其子树）
+const EXCLUDE_TAGS = new Set([
+  'script', 'style', 'noscript', 'iframe', 'svg', 'path', 'meta',
+  'link', 'head', 'title', 'input', 'textarea', 'code', 'pre'
+]);
+
+// 判断一段文本是否值得翻译（过滤空白、单字符、纯数字）
+function isMeaningfulText(text) {
+  const trimmed = text.trim();
+  return !!trimmed && trimmed.length > 1 && !/^\d+$/.test(trimmed);
+}
+
+// 获取可翻译的文本节点。
+// 用 TreeWalker 直接迭代文本节点：命中排除标签或不可见元素时对整棵子树返回
+// FILTER_REJECT（无需递归深入），并用 WeakMap 缓存每个元素的可见性，避免对
+// 同一元素反复调用昂贵的 getComputedStyle，大页面性能明显更好。
+function getTranslatableTextNodes(root) {
+  const textNodes = [];
+  const scope = root || document.body;
+  if (!scope) return textNodes;
+  const visibilityCache = new WeakMap();
+
+  function isElementVisible(el) {
+    if (visibilityCache.has(el)) return visibilityCache.get(el);
+    const style = window.getComputedStyle(el);
+    const visible = !(style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0');
+    visibilityCache.set(el, visible);
+    return visible;
+  }
+
+  const walker = document.createTreeWalker(
+    scope,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          if (EXCLUDE_TAGS.has(node.tagName.toLowerCase())) return NodeFilter.FILTER_REJECT;
+          // 跳过扩展自身注入的 UI（进度条/工具栏/提示），避免二次翻译自己的按钮
+          if (node.dataset && node.dataset.aiTranslateUi === '1') return NodeFilter.FILTER_REJECT;
+          if (!isElementVisible(node)) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_SKIP; // 元素本身不收集，但继续深入其子节点
+        }
+        return isMeaningfulText(node.textContent) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    }
+  );
+
+  let node;
+  while ((node = walker.nextNode())) {
+    textNodes.push(node);
+  }
   return textNodes;
 }
 
@@ -691,23 +836,45 @@ function getTranslationCacheLimitBytes() {
   });
 }
 
+// 估算单条缓存占用的字节数（key + 值的 UTF-8 序列化长度），用于淘汰时避免反复查询存储。
+function estimateEntryBytes(key, value) {
+  try {
+    const json = JSON.stringify(value);
+    if (typeof TextEncoder !== 'undefined') {
+      return key.length + new TextEncoder().encode(json).length;
+    }
+    return key.length + json.length;
+  } catch (error) {
+    return key.length;
+  }
+}
+
 // 缓存写入后按时间淘汰最旧条目，确保不超过用户设置的容量上限。
+// 优化点：只查询一次 getBytesInUse 判断是否超限；超限时用估算大小一次性算出需删除的最旧条目，
+// 批量删除，避免在循环里对每次删除都重新查询字节数（旧实现是 O(n) 次存储调用）。
 async function trimTranslationCache(limitBytes) {
   if (!limitBytes) return;
   try {
     const allData = await storageLocalGet(null);
     const cacheKeys = Object.keys(allData).filter(key => key.startsWith('transCache:'));
+    if (cacheKeys.length === 0) return;
+
     let usage = await storageLocalGetBytesInUse(cacheKeys);
     if (usage <= limitBytes) return;
 
     const entries = cacheKeys
-      .map(key => ({ key, ts: Number(allData[key]?.ts) || 0 }))
+      .map(key => ({ key, ts: Number(allData[key]?.ts) || 0, bytes: estimateEntryBytes(key, allData[key]) }))
       .sort((a, b) => a.ts - b.ts);
 
+    const toRemove = [];
     for (const entry of entries) {
       if (usage <= limitBytes) break;
-      await storageLocalRemove(entry.key);
-      usage = await storageLocalGetBytesInUse(cacheKeys.filter(key => key !== entry.key));
+      toRemove.push(entry.key);
+      usage -= entry.bytes;
+    }
+
+    if (toRemove.length > 0) {
+      await storageLocalRemove(toRemove);
     }
   } catch (error) {
     // 容量整理失败不影响本次翻译结果。
@@ -778,16 +945,22 @@ async function requestTranslationForText(text, targetLang, getSummary) {
   }
   
   const translation = await sendTranslationRequest(text, targetLang, getSummary);
-  
+
   if (cacheKey) {
     try {
       await storageLocalSet({ [cacheKey]: { text: trimmed, translation, ts: Date.now() } });
-      await trimTranslationCache(aiTranslate.cacheLimitBytes || 8 * 1024 * 1024);
+      // 节流：不再每次写入都整理缓存（旧实现每条译文都全量扫描+多次查字节数）。
+      // 累计一定写入量才后台整理一次；翻译结束时还会再整理一次兜底。
+      aiTranslate.cacheWritesSinceTrim = (aiTranslate.cacheWritesSinceTrim || 0) + 1;
+      if (aiTranslate.cacheWritesSinceTrim >= 30) {
+        aiTranslate.cacheWritesSinceTrim = 0;
+        trimTranslationCache(aiTranslate.cacheLimitBytes || 8 * 1024 * 1024);
+      }
     } catch (error) {
       // 写缓存失败（如超出配额）可忽略，不影响本次翻译
     }
   }
-  
+
   return translation;
 }
 
@@ -919,6 +1092,7 @@ function createOrShowToggleButton() {
   if (!aiTranslate.toolbar) {
     const toolbar = document.createElement('div');
     toolbar.id = 'aiTranslateToolbar';
+    toolbar.dataset.aiTranslateUi = '1';
     toolbar.style.cssText = `
       position: fixed;
       bottom: 20px;
@@ -1108,6 +1282,7 @@ function showToast(message) {
   
   const toast = document.createElement('div');
   toast.id = 'aiTranslateToast';
+  toast.dataset.aiTranslateUi = '1';
   toast.style.cssText = `
     position: fixed;
     bottom: 60px;
@@ -1135,48 +1310,8 @@ function showToast(message) {
   }, 2500);
 }
 
-// 获取翻译文本
-function getI18nMessage(key) {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.runtime.sendMessage({
-        action: 'getI18nMessage',
-        key: key
-      }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.error('[AI翻译] 获取翻译文本错误:', chrome.runtime.lastError);
-          // 如果出错，使用默认文本
-          const defaultMessages = {
-            'viewOriginal': '查看原文',
-            'viewTranslation': '查看翻译'
-          };
-          resolve(defaultMessages[key] || key);
-          return;
-        }
-        
-        if (response && response.success) {
-          resolve(response.message);
-        } else {
-          console.warn('[AI翻译] 获取翻译文本失败:', response);
-          // 如果失败，使用默认文本
-          const defaultMessages = {
-            'viewOriginal': '查看原文',
-            'viewTranslation': '查看翻译'
-          };
-          resolve(defaultMessages[key] || key);
-        }
-      });
-    } catch (error) {
-      console.error('[AI翻译] 获取翻译文本异常:', error);
-      // 如果异常，使用默认文本
-      const defaultMessages = {
-        'viewOriginal': '查看原文',
-        'viewTranslation': '查看翻译'
-      };
-      resolve(defaultMessages[key] || key);
-    }
-  });
-}
+// getI18nMessage 由随内容脚本一起注入的 i18n.js 提供（读取 chrome.storage.sync 的
+// interfaceLanguage 直接取文案），不再向 background 单独请求，减少一次跨进程往返与重复维护。
 
 // 更新切换按钮状态
 async function updateToggleButtonState() {

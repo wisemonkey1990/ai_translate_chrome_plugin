@@ -26,7 +26,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["i18n.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
@@ -35,11 +35,5 @@
     "16": "icons/icon.png",
     "48": "icons/icon.png",
     "128": "icons/icon.png"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["content.js"],
-      "matches": ["<all_urls>"]
-    }
-  ]
+  }
 }
