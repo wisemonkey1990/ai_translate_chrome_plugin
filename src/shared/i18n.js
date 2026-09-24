@@ -1,5 +1,6 @@
-// 多语言支持
-const i18n = {
+// 界面多语言文案与默认系统提示词
+// 依赖: constants.js, storage.js
+const I18N_MESSAGES = {
   // 中文
   'zh-CN': {
     // 通用
@@ -38,8 +39,6 @@ const i18n = {
     'apiKeyLabel': 'API Key:',
     'apiKeyPlaceholder': '输入您的API密钥',
     'apiKeyHelp': '您的API密钥，将安全地存储在浏览器中',
-
-
 
     'temperatureLabel': 'Temperature (可选):',
     'temperaturePlaceholder': '0.0 - 1.0',
@@ -109,8 +108,6 @@ const i18n = {
     'apiKeyPlaceholder': 'Enter your API key',
     'apiKeyHelp': 'Your API key, will be stored securely in your browser',
 
-
-
     'temperatureLabel': 'Temperature (Optional):',
     'temperaturePlaceholder': '0.0 - 1.0',
     'temperatureHelp': 'Controls randomness of output, 0 for deterministic, 1 for random',
@@ -141,49 +138,42 @@ const i18n = {
   }
 };
 
-// 获取当前语言
-function getCurrentLanguage() {
-  return new Promise((resolve) => {
-    chrome.storage.sync.get(['interfaceLanguage'], (result) => {
-      resolve(result.interfaceLanguage || 'zh-CN');
-    });
+// 纯函数：按语言取文案并替换 {0}、{1}… 占位符，缺失时回退中文或 key 本身
+function formatI18nMessage(lang, key, args = []) {
+  const table = I18N_MESSAGES[lang] || I18N_MESSAGES[DEFAULT_INTERFACE_LANGUAGE];
+  let message = table[key] || I18N_MESSAGES[DEFAULT_INTERFACE_LANGUAGE][key] || key;
+  args.forEach((arg, index) => {
+    message = message.replace(`{${index}}`, arg);
   });
+  return message;
+}
+
+// 获取当前界面语言
+async function getCurrentLanguage() {
+  try {
+    const result = await syncGet(['interfaceLanguage']);
+    return result.interfaceLanguage || DEFAULT_INTERFACE_LANGUAGE;
+  } catch (error) {
+    return DEFAULT_INTERFACE_LANGUAGE;
+  }
 }
 
 // 获取翻译文本
 async function getI18nMessage(key, ...args) {
-  const lang = await getCurrentLanguage();
-  let message = i18n[lang][key] || i18n['zh-CN'][key] || key;
-  
-  // 替换参数
-  if (args.length > 0) {
-    args.forEach((arg, index) => {
-      message = message.replace(`{${index}}`, arg);
-    });
-  }
-  
-  return message;
+  return formatI18nMessage(await getCurrentLanguage(), key, args);
 }
 
-// 翻译页面元素
+// 翻译页面中所有带 data-i18n 属性的元素
 async function translatePage() {
-  const elements = document.querySelectorAll('[data-i18n]');
-  
-  for (const element of elements) {
-    const key = element.getAttribute('data-i18n');
-    const message = await getI18nMessage(key);
-    
-    if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
-      // 检查是否有placeholder属性
-      if (element.hasAttribute('placeholder')) {
-        element.placeholder = message;
-      } else {
-        element.textContent = message;
-      }
+  const lang = await getCurrentLanguage();
+  document.querySelectorAll('[data-i18n]').forEach((element) => {
+    const message = formatI18nMessage(lang, element.getAttribute('data-i18n'));
+    if ((element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') && element.hasAttribute('placeholder')) {
+      element.placeholder = message;
     } else {
       element.textContent = message;
     }
-  }
+  });
 }
 
 // 默认系统提示词
@@ -205,25 +195,15 @@ const DEFAULT_SYSTEM_PROMPTS = {
 Please only return the final result without additional explanatory information.`
 };
 
-// 获取当前语言的默认系统提示词
-async function getDefaultSystemPrompt() {
-  const lang = await getCurrentLanguage();
-  return DEFAULT_SYSTEM_PROMPTS[lang] || DEFAULT_SYSTEM_PROMPTS['zh-CN'];
+function getDefaultSystemPromptFor(lang) {
+  return DEFAULT_SYSTEM_PROMPTS[lang] || DEFAULT_SYSTEM_PROMPTS[DEFAULT_INTERFACE_LANGUAGE];
 }
 
-// 语言映射到国旗
-const languageFlags = {
-  'zh-CN': '🇨🇳',
-  'en': '🇺🇸',
-  'ja': '🇯🇵',
-  'ko': '🇰🇷',
-  'fr': '🇫🇷',
-  'de': '🇩🇪',
-  'es': '🇪🇸',
-  'ru': '🇷🇺'
-};
+// 获取当前界面语言的默认系统提示词
+async function getDefaultSystemPrompt() {
+  return getDefaultSystemPromptFor(await getCurrentLanguage());
+}
 
-// 获取语言对应的国旗
-function getLanguageFlag(langCode) {
-  return languageFlags[langCode] || '';
+function isDefaultSystemPrompt(prompt) {
+  return Object.values(DEFAULT_SYSTEM_PROMPTS).includes(prompt);
 }

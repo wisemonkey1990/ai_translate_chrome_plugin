@@ -89,29 +89,35 @@
 ## 项目结构
 
 ```text
-background.js   MV3 service worker、API 请求、重试、输出清洗、进度角标
-content.js      DOM 扫描、视口排序、翻译、浮动工具栏、下载、缓存
-popup.html/js   扩展弹窗和翻译控制
-options.html/js 设置页和缓存管理
-tests/          Node 回归测试
-manifest.json   Chrome 扩展清单
+manifest.json                     Chrome 扩展清单（MV3）
+src/shared/                       各运行环境共用：常量、chrome.storage 封装、界面多语言、翻译缓存
+src/background/service-worker.js  MV3 service worker：消息路由、进度角标
+src/background/llm-client.js      /chat/completions 调用、重试、思维链标签清洗
+src/background/prompts.js         翻译与页面总结提示词
+src/content/                      Content script，按 manifest.json 中的顺序加载：
+  state.js                          页面级翻译状态
+  dom-text.js                       DOM 扫描、翻译单元合并、视口优先排序
+  dom-apply.js                      写回译文、原文/译文切换
+  page-ui.js                        进度条、浮动工具栏、对照下载、提示
+  translation-queue.js              自适应并发队列（限流降速）
+  translator.js                     翻译流程编排（缓存、去重、页面总结）
+  main.js                           响应弹窗消息
+src/popup/                        扩展弹窗和翻译控制
+src/options/                      设置页和缓存管理
+tests/                            Node 回归测试
 ```
 
 ## 开发与测试
 
-当前测试无需安装额外依赖。在仓库根目录运行：
+无需安装依赖（需 Node.js 22+）。在仓库根目录运行：
 
 ```bash
-node --check background.js
-node --check content.js
-node --check options.js
-node tests/cleanModelOutput.test.js
-node tests/buildTranslationUnits.test.js
-node tests/orderUnitsByViewport.test.js
-node tests/fetchWithRetry.test.js
+npm test
 ```
 
-测试覆盖思维链标签清理、文本单元合并、视口排序和请求重试逻辑。浏览器相关功能需要在 Chrome 中加载未打包扩展后手动验证。
+该命令会对所有源码做语法检查，并运行 `tests/*.test.js`。测试会把真实源码文件加载到 Node 的 `vm` 上下文中执行，加载方式与 Chrome 加载普通脚本一致。测试覆盖思维链标签清理、请求重试、提示词、界面多语言、文本单元合并、视口排序、自适应并发队列、翻译缓存和对照导出。浏览器相关功能需要在 Chrome 中加载未打包扩展后手动验证。
+
+源码是不经构建的普通脚本：同一运行环境中的文件共享全局作用域，所以加载顺序很重要。Content script 的顺序由 `manifest.json` 决定，service worker 由 `importScripts` 决定，弹窗和设置页由 `<script>` 标签决定。
 
 ## 隐私与安全
 

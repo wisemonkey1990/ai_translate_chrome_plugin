@@ -1,43 +1,14 @@
 // orderUnitsByViewport 单元测试
-// 从 content.js 提取真实函数，注入 window/document 模拟视口后执行。
+// 加载 src/content/dom-text.js 中的真实实现，注入 window/document 模拟视口后执行。
 // 运行: node tests/orderUnitsByViewport.test.js
 
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
+const { loadScripts } = require('./helpers/load-scripts');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
-
-// 抽取从 marker 到第一个顶层平衡 "}" 之间的完整函数文本
-function extractFunction(source, marker) {
-  const idx = source.indexOf(marker);
-  if (idx < 0) {
-    console.error(`错误: 未在源码中找到 ${marker}`);
-    process.exit(1);
-  }
-  let depth = 0;
-  for (let i = idx; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) return source.slice(idx, i + 1);
-    }
-  }
-  console.error('错误: 函数抽取未闭合');
-  process.exit(1);
-}
-
-const fn = extractFunction(src, 'function orderUnitsByViewport(units, loadMargin = 600) {');
-
-// 注入视口相关环境
-const sandbox = {
+const ctx = loadScripts(['src/shared/constants.js', 'src/content/dom-text.js'], {
   window: { innerWidth: 1200, innerHeight: 800 },
   document: { documentElement: { clientWidth: 1200, clientHeight: 800 } }
-};
-vm.createContext(sandbox);
-vm.runInContext(fn + '\n;globalThis.orderUnitsByViewport = orderUnitsByViewport;', sandbox);
-const order = sandbox.orderUnitsByViewport;
+});
+const order = ctx.orderUnitsByViewport;
 
 let passed = 0;
 let failed = 0;
