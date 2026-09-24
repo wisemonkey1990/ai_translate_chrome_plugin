@@ -1,19 +1,8 @@
 // fetchWithRetry 单元测试
-// 从 background.js 尾部提取真实函数，注入 mock fetch / 即时 setTimeout 执行。
+// 加载 src/background/llm-client.js 中的真实实现，注入 mock fetch / 即时 setTimeout 执行。
 // 运行: node tests/fetchWithRetry.test.js
 
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
-
-const src = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
-const marker = 'function sleep(ms) {';
-const idx = src.indexOf(marker);
-if (idx < 0) {
-  console.error('错误: 未在 background.js 中找到 fetchWithRetry');
-  process.exit(1);
-}
-const fnSource = src.slice(idx).trim(); // 文件尾正好是 sleep + fetchWithRetry
+const { loadScripts } = require('./helpers/load-scripts');
 
 const config = {};
 const body = { model: 'm', messages: [] };
@@ -38,10 +27,9 @@ async function runWithResponses(responses) {
       return Promise.resolve(next);
     }
   };
-  vm.createContext(sandbox);
-  vm.runInContext(fnSource + '\n;globalThis._fetchWithRetry = fetchWithRetry;', sandbox);
+  const ctx = loadScripts(['src/shared/constants.js', 'src/background/llm-client.js'], sandbox);
   return {
-    run: (attempts) => sandbox._fetchWithRetry('https://api.test/v1/chat/completions', body, config, attempts),
+    run: (attempts) => ctx.fetchWithRetry('https://api.test/v1/chat/completions', body, config, attempts),
     calls: () => responses.length
   };
 }

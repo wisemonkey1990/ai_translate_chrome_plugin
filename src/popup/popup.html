@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <title data-i18n="appName">AI 网页翻译</title>
   <link rel="stylesheet" href="popup.css">
-  <script src="i18n.js"></script>
 </head>
 <body>
   <div class="container">
@@ -43,12 +42,9 @@
     </div>
   </div>
   
+  <script src="../shared/constants.js"></script>
+  <script src="../shared/storage.js"></script>
+  <script src="../shared/i18n.js"></script>
   <script src="popup.js"></script>
-  <script>
-    // 页面加载完成后翻译UI
-    document.addEventListener('DOMContentLoaded', () => {
-      translatePage();
-    });
-  </script>
 </body>
 </html>

@@ -1,27 +1,11 @@
 // cleanModelOutput 单元测试
-// 直接提取 background.js 末尾的真实函数定义执行，避免与源码脱节。
+// 加载 src/background/llm-client.js 中的真实实现执行。
 // 运行: node tests/cleanModelOutput.test.js
 
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
+const { loadScripts } = require('./helpers/load-scripts');
 
-const MARKER = '// 清洗模型输出中夹带的思维链/推理标签';
-const bgPath = path.join(__dirname, '..', 'background.js');
-const bgSource = fs.readFileSync(bgPath, 'utf8');
-
-const markerIndex = bgSource.indexOf(MARKER);
-if (markerIndex < 0) {
-  console.error('错误: 未在 background.js 中找到 cleanModelOutput 的定义标记');
-  process.exit(1);
-}
-
-// cleanModelOutput 位于文件末尾，从标记行截取到文件尾部即为函数源码
-const fnSource = bgSource.slice(markerIndex).trim();
-const sandbox = {};
-vm.createContext(sandbox);
-vm.runInContext(fnSource + '\n;globalThis.cleanModelOutput = cleanModelOutput;', sandbox);
-const cleanModelOutput = sandbox.cleanModelOutput;
+const ctx = loadScripts(['src/shared/constants.js', 'src/background/llm-client.js']);
+const cleanModelOutput = ctx.cleanModelOutput;
 
 let passed = 0;
 let failed = 0;

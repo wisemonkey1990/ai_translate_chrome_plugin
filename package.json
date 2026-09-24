@@ -1,0 +1,10 @@
+{
+  "name": "ai-web-translator",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Chrome extension: web page translation using an OpenAI-compatible LLM API",
+  "scripts": {
+    "check": "for f in src/*/*.js; do node --check \"$f\" || exit 1; done",
+    "test": "npm run check && node --test \"tests/*.test.js\""
+  }
+}

@@ -90,29 +90,35 @@ The extension cannot run on browser-internal pages such as `chrome://` pages or 
 ## Project Structure
 
 ```text
-background.js   MV3 service worker, API requests, retries, output cleanup, badge progress
-content.js      DOM scanning, viewport scheduling, translation, toolbar, download, cache
-popup.html/js   Extension popup and translation controls
-options.html/js Settings and cache management
-tests/          Node-based regression tests
-manifest.json   Chrome extension manifest
+manifest.json                     Chrome extension manifest (MV3)
+src/shared/                       Loaded by every context: constants, chrome.storage wrappers, i18n, translation cache
+src/background/service-worker.js  MV3 service worker: message routing and badge progress
+src/background/llm-client.js      /chat/completions calls, retries, reasoning-tag cleanup
+src/background/prompts.js         Translation and page-summary prompts
+src/content/                      Content scripts, loaded in the order listed in manifest.json:
+  state.js                          per-page translation state
+  dom-text.js                       DOM scanning, translation units, viewport ordering
+  dom-apply.js                      writing translations, original/translation toggle
+  page-ui.js                        progress overlay, toolbar, comparison download, toast
+  translation-queue.js              adaptive-concurrency queue (rate-limit backoff)
+  translator.js                     translation pipeline (cache, de-duplication, page summary)
+  main.js                           message handling for the popup
+src/popup/                        Extension popup and translation controls
+src/options/                      Settings and cache management
+tests/                            Node-based regression tests
 ```
 
 ## Development and Tests
 
-No package installation is required for the current tests. Run them from the repository root:
+No package installation is required (Node.js 22+). Run from the repository root:
 
 ```bash
-node --check background.js
-node --check content.js
-node --check options.js
-node tests/cleanModelOutput.test.js
-node tests/buildTranslationUnits.test.js
-node tests/orderUnitsByViewport.test.js
-node tests/fetchWithRetry.test.js
+npm test
 ```
 
-The tests cover reasoning-tag cleanup, text-unit merging, viewport ordering, and retry behavior. Browser-level verification should be performed by loading the unpacked extension in Chrome.
+This syntax-checks every source file and runs `tests/*.test.js`. Each test loads the real source files into a Node `vm` context, the same way Chrome loads them as plain scripts. The tests cover reasoning-tag cleanup, retries, prompts, i18n, text-unit merging, viewport ordering, the adaptive-concurrency queue, the translation cache, and comparison export. Browser-level verification should be performed by loading the unpacked extension in Chrome.
+
+The source uses plain scripts with no build step. Every file in a context shares one global scope, so load order matters. The order is set in `manifest.json` for content scripts, in `importScripts` for the service worker, and in `<script>` tags for the popup and options pages.
 
 ## Privacy and Security
 

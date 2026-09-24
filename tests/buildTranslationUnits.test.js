@@ -1,40 +1,11 @@
 // buildTranslationUnits 单元测试
-// 直接从 content.js 提取真实函数定义执行，避免与源码脱节。
+// 加载 src/content/dom-text.js 中的真实实现执行。
 // 运行: node tests/buildTranslationUnits.test.js
 
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
+const { loadScripts } = require('./helpers/load-scripts');
 
-const MARKER = 'function buildTranslationUnits(textNodes, maxChars = 200) {';
-const src = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
-
-const idx = src.indexOf(MARKER);
-if (idx < 0) {
-  console.error('错误: 未在 content.js 中找到 buildTranslationUnits 定义');
-  process.exit(1);
-}
-
-let fn = src.slice(idx);
-let depth = 0;
-let end = -1;
-for (let i = 0; i < fn.length; i++) {
-  const ch = fn[i];
-  if (ch === '{') depth++;
-  else if (ch === '}') {
-    depth--;
-    if (depth === 0) {
-      end = i + 1;
-      break;
-    }
-  }
-}
-fn = fn.slice(0, end);
-
-const sandbox = {};
-vm.createContext(sandbox);
-vm.runInContext(fn + '\n;globalThis.buildTranslationUnits = buildTranslationUnits;', sandbox);
-const build = sandbox.buildTranslationUnits;
+const ctx = loadScripts(['src/shared/constants.js', 'src/content/dom-text.js']);
+const build = ctx.buildTranslationUnits;
 
 let passed = 0;
 let failed = 0;
