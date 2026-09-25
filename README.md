@@ -53,16 +53,18 @@ This project is currently distributed as an unpacked extension.
 
 After changing source files, click **Reload** on the extension card. Reload the webpage before testing content-script changes.
 
+> **Upgrading from an earlier version**: the source files moved into `src/`, and `manifest.json` now points there. After pulling, click **Reload** on the extension card and refresh any open tabs. You do not need to load the extension again or reconfigure it; settings and the translation cache are kept.
+
 ## Configuration
 
 Open the extension popup and click **Settings**. Configure:
 
-- **API Base URL**: the base URL of an OpenAI-compatible API, without the final `/chat/completions` path.
+- **API Base URL**: the base URL of an OpenAI-compatible API, without the final `/chat/completions` path. A trailing `/` is accepted.
 - **Model**: the model name accepted by the selected API provider.
 - **API Key**: stored in Chrome extension storage and never included in this repository.
-- **Temperature** and formatting options.
+- **Temperature** and formatting options. Temperature is optional (default 0.3); `0` is supported.
 - **Page summary**: optional context generation. It runs in parallel and does not block the first translations.
-- **System prompt**: optional translation instructions.
+- **System prompt**: optional translation instructions. If left empty, the default prompt for the current interface language is used.
 - **Translation cache limit**: between 1 MB and 10 MB.
 
 The extension sends webpage text to the API endpoint configured by the user. Do not use an endpoint or model that you do not trust.
@@ -143,6 +145,6 @@ Issues and pull requests are welcome. Please include:
 - A clear description of the problem or proposed change.
 - Reproduction steps for bug reports.
 - Relevant browser console or service-worker errors with secrets removed.
-- Tests for changes to pure logic where practical.
+- Tests for changes to pure logic where practical, and a passing `npm test`.
 
 Never commit API keys, cookies, access tokens, private webpages, or other credentials.
